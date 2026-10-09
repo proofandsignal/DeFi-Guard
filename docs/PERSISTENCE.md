@@ -15,7 +15,7 @@ alert_events
 ```
 
 ### watchlists
-Logical collection owned by an opaque `X-Guard-Owner-Key`.
+Logical collection owned by an opaque `X-Guard-Owner-Key`. The raw key is SHA-256 hashed before any D1 lookup or persistence.
 
 ### positions
 The monitored DeFi target: protocol, chain, asset, optional wallet address and external position id.
@@ -33,6 +33,8 @@ Examples:
 - `OK → WATCH` = `RISK_ESCALATED`
 - `WATCH → WARNING` = `RISK_ESCALATED`
 - `CRITICAL → WATCH` = `RISK_IMPROVED`
+- `WARNING → VERIFY` = `VERIFICATION_REQUIRED`
+- `VERIFY → WATCH` = `VERIFICATION_RESOLVED`
 - `VERIFY → VERIFY` = no new event
 - initial `WARNING` = `INITIAL_ALERT`
 - initial `OK` = no alert event
@@ -45,7 +47,7 @@ All persistence endpoints require:
 
 `X-Guard-Owner-Key: <opaque-owner-key>`
 
-This is only a temporary tenant-boundary mechanism for the beta architecture. It is **not production authentication**.
+Keys shorter than 16 characters are rejected. The raw key is never stored in D1. This remains a temporary tenant-boundary mechanism for the beta architecture and is **not production authentication**.
 
 ### Create watchlist
 `POST /api/v1/watchlists`
