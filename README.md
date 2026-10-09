@@ -1,10 +1,10 @@
-# DeFi Guard — v0.1
+# DeFi Guard — v0.2
 
-Read-only DeFi position monitoring and explainable risk alerts.
+Read-only DeFi position monitoring, watchlists and explainable risk-change events.
 
 ## Product thesis
 
-DeFi Guard is the recurring-monitoring product in the Proof & Signal / DeFi Credit & Yield stack.
+DeFi Guard is the recurring monitoring layer in the Proof & Signal / DeFi Credit & Yield stack.
 
 It answers:
 
@@ -12,61 +12,73 @@ It answers:
 
 It does not custody assets or execute transactions.
 
-## BUILD-001 — Guard Core
+## Current architecture
 
 ```text
-Normalized Position Snapshot
-          ↓
-Data freshness / evidence checks
-          ↓
-Health Factor + liquidation buffer
-          ↓
-Upstream market/security state
-          ↓
-Deterministic Guard Engine
-          ↓
+Watchlist
+   ↓
+Monitored Position
+   ↓
+New Snapshot
+   ↓
+Guard Engine
+   ↓
 OK / WATCH / WARNING / CRITICAL / VERIFY
-          ↓
-Explainable Alert Event
+   ↓
+Compare with Previous Snapshot
+   ↓
+Risk Escalated / Improved / Initial Alert
+   ↓
+Persistent Alert Event
 ```
 
-## v0.1 API
+## BUILD-001 — Guard Core v0.1
 
-- `GET /api/health`
-- `GET /api/v1/meta`
+Implemented:
+- deterministic Guard Engine;
+- Health Factor thresholds;
+- liquidation-buffer thresholds;
+- upstream market/security state;
+- stale/incomplete evidence → VERIFY;
+- explainable reason codes;
+- read-only `POST /api/v1/evaluate`;
+- tests + CI.
+
+## BUILD-002 — Watchlists + Persistence v0.2
+
+Implemented in this build:
+- Cloudflare D1 schema;
+- watchlists;
+- monitored positions;
+- immutable snapshots;
+- alert event history;
+- deterministic change detection;
+- temporary owner-key tenant boundary;
+- D1 deployment gate.
+
+### Persistence API
+
+Requires `X-Guard-Owner-Key`.
+
+- `POST /api/v1/watchlists`
+- `GET /api/v1/watchlists`
+- `POST /api/v1/watchlists/:watchlistId/positions`
+- `GET /api/v1/watchlists/:watchlistId/positions`
+- `POST /api/v1/positions/:positionId/snapshots`
+- `GET /api/v1/positions/:positionId/events`
+
+The standalone evaluator remains:
+
 - `POST /api/v1/evaluate`
 
-Example evaluation payload:
+Operational endpoints:
+- `GET /api/health`
+- `GET /api/v1/meta`
 
-```json
-{
-  "positionId": "p-001",
-  "protocol": "Aave",
-  "chain": "Ethereum",
-  "asset": "USDC",
-  "healthFactor": 1.18,
-  "collateralValueUsd": 10000,
-  "debtValueUsd": 5000,
-  "ltvPct": 50,
-  "liquidationThresholdPct": 80,
-  "marketDecision": "PASS",
-  "securityState": "PASS",
-  "dataState": "SUFFICIENT",
-  "updatedAt": "2026-10-09T06:00:00Z"
-}
-```
-
-The response contains an alert state, verification flag and explicit reason codes.
-
-## Alert states
-
-- **OK** — no v0.1 rule is triggered.
-- **WATCH** — monitor a non-urgent risk change.
-- **WARNING** — material risk condition.
-- **CRITICAL** — explicit high-risk condition.
-- **VERIFY** — critical evidence is missing/stale/incomplete.
-
-See `docs/ALERT_MODEL.md`.
+See:
+- `docs/ALERT_MODEL.md`
+- `docs/PERSISTENCE.md`
+- `docs/D1_DEPLOYMENT.md`
 
 ## Safety boundary
 
@@ -78,29 +90,57 @@ DeFi Guard does **not**:
 - automatically rebalance positions;
 - provide discretionary portfolio management.
 
-## v0.1 Definition of Done
+## BUILD-002 Definition of Done
 
-- [x] Separate repository and branch.
-- [x] Deterministic Guard Rule Engine.
-- [x] Health Factor thresholds.
-- [x] Liquidation-buffer thresholds.
-- [x] Upstream market/security state handling.
-- [x] Stale/incomplete data → VERIFY.
-- [x] Explainable reason codes.
-- [x] Read-only evaluation API.
-- [x] Unit tests.
-- [x] GitHub Actions workflow.
+- [x] Separate BUILD-002 branch.
+- [x] D1 schema.
+- [x] Watchlist persistence.
+- [x] Position persistence.
+- [x] Snapshot persistence.
+- [x] Alert event persistence.
+- [x] State-change detector.
+- [x] Persistence API.
+- [x] Unit tests for change detection.
+- [x] Deployment gate documentation.
 - [ ] CI PASS on PR.
-- [ ] First deployed Worker.
-- [ ] First real position snapshot evaluated.
-- [ ] First external tester.
-- [ ] First paid Guard user.
+- [ ] Real D1 database created and bound.
+- [ ] Migration applied.
+- [ ] First persisted real position.
+- [ ] First persisted alert-state transition.
+- [ ] Worker deployment PASS.
 
-## Next builds
+## Next — BUILD-003
 
-`v0.1 Guard Core → v0.2 Watchlists + Persistence → v0.3 Scheduled Monitoring + Alert Delivery → Paid Beta`
+`Scheduled Monitoring + Alert Delivery`
 
-The future monitoring layer may consume normalized intelligence from DeFi Credit & Yield Lab through a stable API contract. The repositories remain isolated and do not share source code.
+```text
+Enabled positions
+      ↓
+Scheduled Worker
+      ↓
+Fresh protocol / intelligence data
+      ↓
+New snapshot
+      ↓
+Guard Engine + Change Detection
+      ↓
+Delivery Policy
+      ↓
+Email / Telegram / webhook
+```
+
+BUILD-003 is the first build that turns DeFi Guard into a real recurring-monitoring service suitable for paid beta testing.
+
+## Commercial direction
+
+Initial validation hypothesis:
+
+- Free: limited manual evaluation.
+- Founding Guard: **€19/month**.
+- Pro Guard: **€29–39/month** after validation.
+- B2B monitoring/API: later, after retail monitoring is proven.
+
+Pricing is a hypothesis until real customers pay.
 
 ## License
 
