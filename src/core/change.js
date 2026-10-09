@@ -1,9 +1,9 @@
 const RANK = {
   OK: 0,
   WATCH: 1,
-  VERIFY: 2,
-  WARNING: 3,
-  CRITICAL: 4
+  WARNING: 2,
+  CRITICAL: 3,
+  VERIFY: 2
 };
 
 export function severityRank(state) {
@@ -13,7 +13,6 @@ export function severityRank(state) {
 export function detectAlertChange(previousState, currentState) {
   const prev = previousState ? String(previousState).toUpperCase() : null;
   const curr = String(currentState || '').toUpperCase();
-  const prevRank = prev == null ? -1 : severityRank(prev);
   const currRank = severityRank(curr);
 
   if (currRank < 0) {
@@ -46,6 +45,27 @@ export function detectAlertChange(previousState, currentState) {
     };
   }
 
+  if (curr === 'VERIFY') {
+    return {
+      changed: true,
+      eventType: 'VERIFICATION_REQUIRED',
+      previousState: prev,
+      currentState: curr,
+      severityRank: currRank
+    };
+  }
+
+  if (prev === 'VERIFY') {
+    return {
+      changed: true,
+      eventType: 'VERIFICATION_RESOLVED',
+      previousState: prev,
+      currentState: curr,
+      severityRank: currRank
+    };
+  }
+
+  const prevRank = severityRank(prev);
   return {
     changed: true,
     eventType: currRank > prevRank ? 'RISK_ESCALATED' : 'RISK_IMPROVED',
