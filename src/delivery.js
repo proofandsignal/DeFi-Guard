@@ -1,7 +1,12 @@
-import { alertSubject, alertText } from './core/delivery-policy.js';
+import { alertSubject, alertText, validateDeliveryTarget } from './core/delivery-policy.js';
 
 export async function deliverAlert(destination, context, env) {
   const channel=String(destination?.channel || '').toLowerCase();
+  const validation=validateDeliveryTarget(channel,destination?.target);
+  if(!validation.ok){
+    return {ok:false,providerMessageId:null,error:validation.error};
+  }
+  destination={...destination,target:validation.value};
 
   if(channel==='webhook') return deliverWebhook(destination,context,env);
   if(channel==='email') return deliverEmail(destination,context,env);
