@@ -1,0 +1,11 @@
+# Local/development placeholders only.
+# Copy to .dev.vars and fill values locally. Never commit real secrets.
+
+SNAPSHOT_PROVIDER_URL=https://example.com/internal/defi-position-snapshot
+SNAPSHOT_PROVIDER_TOKEN=replace-me
+
+RESEND_API_KEY=re_replace_me
+ALERT_EMAIL_FROM=DeFi Guard <alerts@example.com>
+
+# Optional. Applied to all generic webhook deliveries.
+WEBHOOK_BEARER_TOKEN=replace-me
