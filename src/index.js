@@ -51,7 +51,7 @@ export default {
 
     if (url.pathname === '/api/v1/watchlists') {
       if (!env?.DB) return dbMissing();
-      const ownerKey = owner(request);
+      const ownerKey = await ownerHash(request);
       if (!ownerKey) return json({ error:'owner_key_required' }, { status:401 });
 
       if (request.method === 'GET') {
@@ -74,7 +74,7 @@ export default {
     const watchlistMatch=url.pathname.match(/^\/api\/v1\/watchlists\/([^/]+)\/positions$/);
     if(watchlistMatch){
       if (!env?.DB) return dbMissing();
-      const ownerKey=owner(request);
+      const ownerKey=await ownerHash(request);
       if(!ownerKey) return json({error:'owner_key_required'},{status:401});
       const watchlistId=decodeURIComponent(watchlistMatch[1]);
       const watchlist=await getWatchlist(env.DB,watchlistId);
@@ -112,7 +112,7 @@ export default {
     const snapshotMatch=url.pathname.match(/^\/api\/v1\/positions\/([^/]+)\/snapshots$/);
     if(snapshotMatch && request.method==='POST'){
       if (!env?.DB) return dbMissing();
-      const ownerKey=owner(request);
+      const ownerKey=await ownerHash(request);
       if(!ownerKey) return json({error:'owner_key_required'},{status:401});
       const positionId=decodeURIComponent(snapshotMatch[1]);
       const position=await ownedPosition(env.DB,positionId,ownerKey);
@@ -163,7 +163,7 @@ export default {
     const eventsMatch=url.pathname.match(/^\/api\/v1\/positions\/([^/]+)\/events$/);
     if(eventsMatch && request.method==='GET'){
       if (!env?.DB) return dbMissing();
-      const ownerKey=owner(request);
+      const ownerKey=await ownerHash(request);
       if(!ownerKey) return json({error:'owner_key_required'},{status:401});
       const positionId=decodeURIComponent(eventsMatch[1]);
       const position=await ownedPosition(env.DB,positionId,ownerKey);
@@ -183,9 +183,13 @@ async function ownedPosition(db,positionId,ownerKey){
   return position;
 }
 
-function owner(request){
+async function ownerHash(request){
   const value=request.headers.get('X-Guard-Owner-Key');
-  return value ? value.trim().slice(0,200) : null;
+  const normalized=value ? value.trim() : '';
+  if(normalized.length < 16) return null;
+  const bytes=new TextEncoder().encode(normalized.slice(0,500));
+  const digest=await crypto.subtle.digest('SHA-256',bytes);
+  return [...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
 }
 
 function nullableString(value){
