@@ -31,6 +31,7 @@ async function deliverWebhook(destination,context,env){
   try{
     const response=await fetchWithTimeout(destination.target,{
       method:'POST',
+      redirect:'manual',
       headers,
       body:JSON.stringify({
         service:'DeFi Guard',
