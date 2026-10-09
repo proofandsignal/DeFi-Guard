@@ -1,16 +1,12 @@
-# DeFi Guard — v0.2
+# DeFi Guard — v0.3
 
-Read-only DeFi position monitoring, watchlists and explainable risk-change events.
+Read-only DeFi position monitoring with persistent watchlists, scheduled checks, change detection and explainable alert delivery.
 
 ## Product thesis
 
-DeFi Guard is the recurring monitoring layer in the Proof & Signal / DeFi Credit & Yield stack.
+> **Follow my DeFi position and warn me when the risk actually changes.**
 
-It answers:
-
-> **What changed in this DeFi position, and does the user need to pay attention now?**
-
-It does not custody assets or execute transactions.
+DeFi Guard does not custody assets or execute transactions.
 
 ## Current architecture
 
@@ -19,7 +15,9 @@ Watchlist
    ↓
 Monitored Position
    ↓
-New Snapshot
+Cloudflare Cron (5 min beta cadence)
+   ↓
+Normalized Snapshot Provider
    ↓
 Guard Engine
    ↓
@@ -27,9 +25,14 @@ OK / WATCH / WARNING / CRITICAL / VERIFY
    ↓
 Compare with Previous Snapshot
    ↓
-Risk Escalated / Improved / Initial Alert
+No change → silence
+Change → Alert Event
    ↓
-Persistent Alert Event
+Delivery Policy
+   ↓
+Email / HTTPS Webhook
+   ↓
+Delivery Audit Record
 ```
 
 ## BUILD-001 — Guard Core v0.1
@@ -41,44 +44,104 @@ Implemented:
 - upstream market/security state;
 - stale/incomplete evidence → VERIFY;
 - explainable reason codes;
-- read-only `POST /api/v1/evaluate`;
+- read-only evaluator;
 - tests + CI.
 
 ## BUILD-002 — Watchlists + Persistence v0.2
 
-Implemented in this build:
+Implemented:
 - Cloudflare D1 schema;
-- watchlists;
-- monitored positions;
+- watchlists and monitored positions;
 - immutable snapshots;
 - alert event history;
+- hashed owner-key tenant boundary;
 - deterministic change detection;
-- temporary owner-key tenant boundary;
-- D1 deployment gate.
+- persistence API.
 
-### Persistence API
+## BUILD-003 — Scheduled Monitoring + Alert Delivery v0.3
+
+Implemented in code:
+- Cloudflare scheduled handler;
+- five-minute beta cron;
+- enabled-position monitoring loop;
+- external normalized snapshot-provider contract;
+- alert delivery policy;
+- Resend email adapter;
+- generic HTTPS webhook adapter;
+- webhook target validation + redirect blocking;
+- delivery destinations API;
+- monitor run audit records;
+- delivery attempt audit records;
+- no-change → no notification behavior;
+- tests for delivery policy and destination validation.
+
+### Delivery destination API
 
 Requires `X-Guard-Owner-Key`.
 
-- `POST /api/v1/watchlists`
-- `GET /api/v1/watchlists`
-- `POST /api/v1/watchlists/:watchlistId/positions`
-- `GET /api/v1/watchlists/:watchlistId/positions`
-- `POST /api/v1/positions/:positionId/snapshots`
-- `GET /api/v1/positions/:positionId/events`
+- `POST /api/v1/watchlists/:watchlistId/destinations`
+- `GET /api/v1/watchlists/:watchlistId/destinations`
 
-The standalone evaluator remains:
+Supported channels:
+- `email`
+- `webhook`
 
-- `POST /api/v1/evaluate`
+### Operational endpoints
 
-Operational endpoints:
 - `GET /api/health`
 - `GET /api/v1/meta`
+- `POST /api/v1/evaluate`
 
 See:
 - `docs/ALERT_MODEL.md`
 - `docs/PERSISTENCE.md`
 - `docs/D1_DEPLOYMENT.md`
+- `docs/MONITORING_DELIVERY.md`
+
+## BUILD-003 Definition of Done
+
+### Code
+- [x] Separate BUILD-003 branch.
+- [x] Scheduled Worker handler.
+- [x] Cron configuration.
+- [x] Enabled position batch monitoring.
+- [x] Snapshot provider contract.
+- [x] Change-only delivery policy.
+- [x] Email adapter.
+- [x] HTTPS webhook adapter.
+- [x] Webhook SSRF-oriented validation.
+- [x] Monitor run persistence.
+- [x] Delivery audit persistence.
+- [x] Destination API.
+- [x] Unit tests for delivery policy.
+- [ ] GitHub Actions PASS.
+
+### Deployment / Revenue Gate
+- [ ] Real D1 database bound as `DB`.
+- [ ] D1 migrations 0001 + 0002 applied.
+- [ ] Real snapshot provider connected.
+- [ ] Resend sender configured.
+- [ ] First real position monitored by cron.
+- [ ] First real risk transition detected.
+- [ ] First real email/webhook delivered.
+- [ ] Next unchanged run produces no duplicate notification.
+- [ ] First external beta tester.
+- [ ] First **€19 Founding Guard** payment.
+
+## Environment
+
+Never commit secrets.
+
+Runtime configuration may include:
+
+- `SNAPSHOT_PROVIDER_URL`
+- `SNAPSHOT_PROVIDER_TOKEN` — secret if used
+- `RESEND_API_KEY` — secret
+- `ALERT_EMAIL_FROM`
+- `WEBHOOK_BEARER_TOKEN` — optional secret
+- `MONITOR_BATCH_SIZE`
+
+See `.dev.vars.example`.
 
 ## Safety boundary
 
@@ -88,59 +151,19 @@ DeFi Guard does **not**:
 - sign or execute transactions;
 - move user funds;
 - automatically rebalance positions;
+- claim five-minute monitoring prevents liquidation;
 - provide discretionary portfolio management.
 
-## BUILD-002 Definition of Done
+## Commercial validation
 
-- [x] Separate BUILD-002 branch.
-- [x] D1 schema.
-- [x] Watchlist persistence.
-- [x] Position persistence.
-- [x] Snapshot persistence.
-- [x] Alert event persistence.
-- [x] State-change detector.
-- [x] Persistence API.
-- [x] Unit tests for change detection.
-- [x] Deployment gate documentation.
-- [ ] CI PASS on PR.
-- [ ] Real D1 database created and bound.
-- [ ] Migration applied.
-- [ ] First persisted real position.
-- [ ] First persisted alert-state transition.
-- [ ] Worker deployment PASS.
+Initial hypothesis:
 
-## Next — BUILD-003
+- Manual/free evaluation: acquisition.
+- **Founding Guard: €19/month.**
+- Pro Guard: **€29–39/month** only after paid validation.
+- B2B monitoring/API: later.
 
-`Scheduled Monitoring + Alert Delivery`
-
-```text
-Enabled positions
-      ↓
-Scheduled Worker
-      ↓
-Fresh protocol / intelligence data
-      ↓
-New snapshot
-      ↓
-Guard Engine + Change Detection
-      ↓
-Delivery Policy
-      ↓
-Email / Telegram / webhook
-```
-
-BUILD-003 is the first build that turns DeFi Guard into a real recurring-monitoring service suitable for paid beta testing.
-
-## Commercial direction
-
-Initial validation hypothesis:
-
-- Free: limited manual evaluation.
-- Founding Guard: **€19/month**.
-- Pro Guard: **€29–39/month** after validation.
-- B2B monitoring/API: later, after retail monitoring is proven.
-
-Pricing is a hypothesis until real customers pay.
+Pricing remains a hypothesis until real customers pay.
 
 ## License
 
