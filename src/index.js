@@ -1,15 +1,33 @@
 import { evaluatePosition } from './core/guard.js';
+import { detectAlertChange } from './core/change.js';
+import {
+  createWatchlist,
+  listWatchlists,
+  getWatchlist,
+  addPosition,
+  getPosition,
+  listPositions,
+  latestSnapshot,
+  saveSnapshot,
+  saveAlertEvent,
+  listAlertEvents
+} from './store.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 export default {
-  async fetch(request) {
-    if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') return cors(new Response(null, { status:204 }));
 
     const url = new URL(request.url);
 
     if (request.method === 'GET' && url.pathname === '/api/health') {
-      return json({ ok:true, service:'defi-guard', version:VERSION });
+      return json({
+        ok:true,
+        service:'defi-guard',
+        version:VERSION,
+        persistence:Boolean(env?.DB)
+      });
     }
 
     if (request.method === 'GET' && url.pathname === '/api/v1/meta') {
@@ -17,39 +35,192 @@ export default {
         service:'DeFi Guard',
         version:VERSION,
         mode:'read-only',
-        architecture:'Position Snapshot -> Guard Rule Engine -> Explainable Alert Event',
+        architecture:'Watchlist -> Position -> Snapshot -> Guard Engine -> Change Detection -> Alert Event',
         alertStates:['OK','WATCH','WARNING','CRITICAL','VERIFY'],
+        persistence:'Cloudflare D1 via env.DB',
         execution:false,
         custody:false
       });
     }
 
     if (request.method === 'POST' && url.pathname === '/api/v1/evaluate') {
-      let payload;
-      try {
-        payload = await request.json();
-      } catch {
-        return json({ error:'invalid_json' }, { status:400 });
+      const payload = await readJson(request);
+      if (payload.error) return payload.error;
+      return json(evaluatePosition(payload.value));
+    }
+
+    if (url.pathname === '/api/v1/watchlists') {
+      if (!env?.DB) return dbMissing();
+      const ownerKey = owner(request);
+      if (!ownerKey) return json({ error:'owner_key_required' }, { status:401 });
+
+      if (request.method === 'GET') {
+        return json({ data:await listWatchlists(env.DB,ownerKey) });
       }
-      return json(evaluatePosition(payload));
+
+      if (request.method === 'POST') {
+        const payload=await readJson(request);
+        if(payload.error) return payload.error;
+        const label=String(payload.value?.label || '').trim();
+        if(!label) return json({ error:'label_required' }, { status:400 });
+        const now=new Date().toISOString();
+        const watchlist=await createWatchlist(env.DB,{
+          id:crypto.randomUUID(),ownerKey,label:label.slice(0,120),now
+        });
+        return json(watchlist,{status:201});
+      }
+    }
+
+    const watchlistMatch=url.pathname.match(/^\/api\/v1\/watchlists\/([^/]+)\/positions$/);
+    if(watchlistMatch){
+      if (!env?.DB) return dbMissing();
+      const ownerKey=owner(request);
+      if(!ownerKey) return json({error:'owner_key_required'},{status:401});
+      const watchlistId=decodeURIComponent(watchlistMatch[1]);
+      const watchlist=await getWatchlist(env.DB,watchlistId);
+      if(!watchlist || watchlist.ownerKey!==ownerKey) return json({error:'watchlist_not_found'},{status:404});
+
+      if(request.method==='GET'){
+        return json({data:await listPositions(env.DB,watchlistId)});
+      }
+
+      if(request.method==='POST'){
+        const payload=await readJson(request);
+        if(payload.error) return payload.error;
+        const body=payload.value || {};
+        const protocol=String(body.protocol || '').trim();
+        const chain=String(body.chain || '').trim();
+        const asset=String(body.asset || '').trim().toUpperCase();
+        if(!protocol || !chain || !asset){
+          return json({error:'protocol_chain_asset_required'},{status:400});
+        }
+        const now=new Date().toISOString();
+        const position=await addPosition(env.DB,{
+          id:crypto.randomUUID(),
+          watchlistId,
+          externalPositionId:nullableString(body.externalPositionId),
+          walletAddress:nullableString(body.walletAddress),
+          protocol:protocol.slice(0,80),
+          chain:chain.slice(0,80),
+          asset:asset.slice(0,40),
+          now
+        });
+        return json(position,{status:201});
+      }
+    }
+
+    const snapshotMatch=url.pathname.match(/^\/api\/v1\/positions\/([^/]+)\/snapshots$/);
+    if(snapshotMatch && request.method==='POST'){
+      if (!env?.DB) return dbMissing();
+      const ownerKey=owner(request);
+      if(!ownerKey) return json({error:'owner_key_required'},{status:401});
+      const positionId=decodeURIComponent(snapshotMatch[1]);
+      const position=await ownedPosition(env.DB,positionId,ownerKey);
+      if(!position) return json({error:'position_not_found'},{status:404});
+
+      const payload=await readJson(request);
+      if(payload.error) return payload.error;
+      const body={
+        ...(payload.value || {}),
+        positionId,
+        protocol:position.protocol,
+        chain:position.chain,
+        asset:position.asset
+      };
+
+      const evaluation=evaluatePosition(body);
+      const previous=await latestSnapshot(env.DB,positionId);
+      const change=detectAlertChange(previous?.alertState || null,evaluation.alertState);
+      const now=new Date().toISOString();
+      const snapshotId=crypto.randomUUID();
+      const snapshot=await saveSnapshot(env.DB,{
+        id:snapshotId,
+        positionId,
+        observedAt:body.updatedAt || now,
+        payload:body,
+        evaluation,
+        createdAt:now
+      });
+
+      let event=null;
+      if(change.changed){
+        event=await saveAlertEvent(env.DB,{
+          id:crypto.randomUUID(),
+          positionId,
+          snapshotId,
+          previousState:change.previousState,
+          currentState:change.currentState,
+          eventType:change.eventType,
+          severityRank:change.severityRank,
+          reasons:evaluation.reasons,
+          createdAt:now
+        });
+      }
+
+      return json({snapshot,change,event},{status:201});
+    }
+
+    const eventsMatch=url.pathname.match(/^\/api\/v1\/positions\/([^/]+)\/events$/);
+    if(eventsMatch && request.method==='GET'){
+      if (!env?.DB) return dbMissing();
+      const ownerKey=owner(request);
+      if(!ownerKey) return json({error:'owner_key_required'},{status:401});
+      const positionId=decodeURIComponent(eventsMatch[1]);
+      const position=await ownedPosition(env.DB,positionId,ownerKey);
+      if(!position) return json({error:'position_not_found'},{status:404});
+      return json({data:await listAlertEvents(env.DB,positionId,url.searchParams.get('limit'))});
     }
 
     return json({ error:'not_found' }, { status:404 });
   }
 };
 
-function json(body, init = {}) {
-  const headers = new Headers(init.headers || {});
-  headers.set('content-type','application/json; charset=utf-8');
-  return cors(new Response(JSON.stringify(body), { ...init, headers }));
+async function ownedPosition(db,positionId,ownerKey){
+  const position=await getPosition(db,positionId);
+  if(!position) return null;
+  const watchlist=await getWatchlist(db,position.watchlistId);
+  if(!watchlist || watchlist.ownerKey!==ownerKey) return null;
+  return position;
 }
 
-function cors(response) {
-  const headers = new Headers(response.headers);
+function owner(request){
+  const value=request.headers.get('X-Guard-Owner-Key');
+  return value ? value.trim().slice(0,200) : null;
+}
+
+function nullableString(value){
+  if(value==null) return null;
+  const text=String(value).trim();
+  return text ? text.slice(0,200) : null;
+}
+
+async function readJson(request){
+  try{
+    return {value:await request.json()};
+  }catch{
+    return {error:json({error:'invalid_json'},{status:400})};
+  }
+}
+
+function dbMissing(){
+  return json({
+    error:'d1_not_configured',
+    message:'Bind a Cloudflare D1 database as env.DB and apply migrations before using persistence endpoints.'
+  },{status:503});
+}
+
+function json(body,init={}){
+  const headers=new Headers(init.headers || {});
+  headers.set('content-type','application/json; charset=utf-8');
+  return cors(new Response(JSON.stringify(body),{...init,headers}));
+}
+
+function cors(response){
+  const headers=new Headers(response.headers);
   headers.set('Access-Control-Allow-Origin','*');
-  headers.set('Access-Control-Allow-Headers','Content-Type,Authorization,X-API-Key');
+  headers.set('Access-Control-Allow-Headers','Content-Type,Authorization,X-API-Key,X-Guard-Owner-Key');
   headers.set('Access-Control-Allow-Methods','GET,POST,OPTIONS');
-  return new Response(response.body, {
+  return new Response(response.body,{
     status:response.status,
     statusText:response.statusText,
     headers
