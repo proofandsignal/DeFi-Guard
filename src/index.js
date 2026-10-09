@@ -1,5 +1,7 @@
 import { evaluatePosition } from './core/guard.js';
 import { detectAlertChange } from './core/change.js';
+import { validateDeliveryTarget } from './core/delivery-policy.js';
+import { runScheduledMonitoring } from './monitor.js';
 import {
   createWatchlist,
   listWatchlists,
@@ -10,10 +12,12 @@ import {
   latestSnapshot,
   saveSnapshot,
   saveAlertEvent,
-  listAlertEvents
+  listAlertEvents,
+  createDeliveryDestination,
+  listDeliveryDestinations
 } from './store.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 export default {
   async fetch(request, env) {
@@ -26,7 +30,9 @@ export default {
         ok:true,
         service:'defi-guard',
         version:VERSION,
-        persistence:Boolean(env?.DB)
+        persistence:Boolean(env?.DB),
+        snapshotProvider:Boolean(env?.SNAPSHOT_PROVIDER_URL),
+        emailDelivery:Boolean(env?.RESEND_API_KEY && env?.ALERT_EMAIL_FROM)
       });
     }
 
@@ -35,8 +41,10 @@ export default {
         service:'DeFi Guard',
         version:VERSION,
         mode:'read-only',
-        architecture:'Watchlist -> Position -> Snapshot -> Guard Engine -> Change Detection -> Alert Event',
+        architecture:'Cron -> Enabled Positions -> Snapshot Provider -> Guard Engine -> Change Detection -> Delivery Policy -> Email/Webhook',
         alertStates:['OK','WATCH','WARNING','CRITICAL','VERIFY'],
+        deliveryChannels:['email','webhook'],
+        schedule:'every 5 minutes',
         persistence:'Cloudflare D1 via env.DB',
         execution:false,
         custody:false
@@ -55,7 +63,8 @@ export default {
       if (!ownerKey) return json({ error:'owner_key_required' }, { status:401 });
 
       if (request.method === 'GET') {
-        return json({ data:await listWatchlists(env.DB,ownerKey) });
+        const rows=await listWatchlists(env.DB,ownerKey);
+        return json({ data:rows.map(publicWatchlist) });
       }
 
       if (request.method === 'POST') {
@@ -67,7 +76,7 @@ export default {
         const watchlist=await createWatchlist(env.DB,{
           id:crypto.randomUUID(),ownerKey,label:label.slice(0,120),now
         });
-        return json(watchlist,{status:201});
+        return json(publicWatchlist(watchlist),{status:201});
       }
     }
 
@@ -106,6 +115,39 @@ export default {
           now
         });
         return json(position,{status:201});
+      }
+    }
+
+    const destinationMatch=url.pathname.match(/^\/api\/v1\/watchlists\/([^/]+)\/destinations$/);
+    if(destinationMatch){
+      if (!env?.DB) return dbMissing();
+      const ownerKey=await ownerHash(request);
+      if(!ownerKey) return json({error:'owner_key_required'},{status:401});
+      const watchlistId=decodeURIComponent(destinationMatch[1]);
+      const watchlist=await getWatchlist(env.DB,watchlistId);
+      if(!watchlist || watchlist.ownerKey!==ownerKey) return json({error:'watchlist_not_found'},{status:404});
+
+      if(request.method==='GET'){
+        const rows=await listDeliveryDestinations(env.DB,watchlistId);
+        return json({data:rows.map(publicDestination)});
+      }
+
+      if(request.method==='POST'){
+        const payload=await readJson(request);
+        if(payload.error) return payload.error;
+        const body=payload.value || {};
+        const channel=String(body.channel || '').trim().toLowerCase();
+        const validated=validateDeliveryTarget(channel,body.target);
+        if(!validated.ok) return json({error:validated.error},{status:400});
+        const now=new Date().toISOString();
+        const destination=await createDeliveryDestination(env.DB,{
+          id:crypto.randomUUID(),
+          watchlistId,
+          channel,
+          target:validated.value,
+          now
+        });
+        return json(publicDestination(destination),{status:201});
       }
     }
 
@@ -172,6 +214,21 @@ export default {
     }
 
     return json({ error:'not_found' }, { status:404 });
+  },
+
+  async scheduled(controller, env, ctx) {
+    const scheduledAt=new Date(controller?.scheduledTime || Date.now()).toISOString();
+    const task=runScheduledMonitoring(env,scheduledAt)
+      .then(result=>console.log(JSON.stringify({type:'defi_guard_monitor_run',...result})))
+      .catch(error=>{
+        console.error(JSON.stringify({
+          type:'defi_guard_monitor_failure',
+          scheduledAt,
+          error:String(error?.message || error)
+        }));
+        throw error;
+      });
+    ctx.waitUntil(task);
   }
 };
 
@@ -190,6 +247,29 @@ async function ownerHash(request){
   const bytes=new TextEncoder().encode(normalized.slice(0,500));
   const digest=await crypto.subtle.digest('SHA-256',bytes);
   return [...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+
+function publicWatchlist(watchlist){
+  const {ownerKey,...rest}=watchlist;
+  return rest;
+}
+
+function publicDestination(destination){
+  const target=String(destination.target || '');
+  let targetHint=target;
+  if(destination.channel==='email'){
+    const [local,domain]=target.split('@');
+    targetHint=domain ? `${String(local || '').slice(0,2)}***@${domain}` : '***';
+  }else if(destination.channel==='webhook'){
+    try{
+      const u=new URL(target);
+      targetHint=`${u.origin}/…`;
+    }catch{
+      targetHint='https://…';
+    }
+  }
+  const {target:_,...rest}=destination;
+  return {...rest,targetHint};
 }
 
 function nullableString(value){
