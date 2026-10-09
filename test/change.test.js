@@ -32,8 +32,19 @@ test('same state is unchanged',()=>{
   assert.equal(x.eventType,'UNCHANGED');
 });
 
-test('severity order is deterministic',()=>{
+test('transition into VERIFY is verification required, not fake risk improvement',()=>{
+  const x=detectAlertChange('WARNING','VERIFY');
+  assert.equal(x.changed,true);
+  assert.equal(x.eventType,'VERIFICATION_REQUIRED');
+});
+
+test('transition out of VERIFY is verification resolved',()=>{
+  const x=detectAlertChange('VERIFY','WATCH');
+  assert.equal(x.changed,true);
+  assert.equal(x.eventType,'VERIFICATION_RESOLVED');
+});
+
+test('risk severity order is deterministic',()=>{
   assert.ok(severityRank('CRITICAL') > severityRank('WARNING'));
   assert.ok(severityRank('WARNING') > severityRank('WATCH'));
-  assert.ok(severityRank('VERIFY') > severityRank('WATCH'));
 });
