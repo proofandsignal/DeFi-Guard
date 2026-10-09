@@ -188,3 +188,111 @@ export async function listAlertEvents(db, positionId, limit = 50) {
     createdAt:x.created_at
   }));
 }
+
+
+export async function listEnabledPositions(db, limit = 100) {
+  requireDb(db);
+  const safeLimit=Math.max(1,Math.min(500,Number(limit)||100));
+  const out=await db.prepare(
+    `SELECT id, watchlist_id, external_position_id, wallet_address, protocol, chain, asset,
+            enabled, created_at, updated_at, last_checked_at, last_error
+     FROM positions WHERE enabled = 1 ORDER BY COALESCE(last_checked_at, created_at) ASC LIMIT ?`
+  ).bind(safeLimit).all();
+  return (out.results || []).map(x=>({
+    id:x.id,
+    watchlistId:x.watchlist_id,
+    externalPositionId:x.external_position_id,
+    walletAddress:x.wallet_address,
+    protocol:x.protocol,
+    chain:x.chain,
+    asset:x.asset,
+    enabled:Boolean(x.enabled),
+    createdAt:x.created_at,
+    updatedAt:x.updated_at,
+    lastCheckedAt:x.last_checked_at,
+    lastError:x.last_error
+  }));
+}
+
+export async function updatePositionCheck(db, positionId, { checkedAt, error = null }) {
+  requireDb(db);
+  await db.prepare(
+    'UPDATE positions SET last_checked_at = ?, last_error = ?, updated_at = ? WHERE id = ?'
+  ).bind(checkedAt,error,checkedAt,positionId).run();
+}
+
+export async function createDeliveryDestination(db, d) {
+  requireDb(db);
+  await db.prepare(
+    `INSERT INTO delivery_destinations
+      (id, watchlist_id, channel, target, enabled, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 1, ?, ?)`
+  ).bind(d.id,d.watchlistId,d.channel,d.target,d.now,d.now).run();
+  return {
+    id:d.id,
+    watchlistId:d.watchlistId,
+    channel:d.channel,
+    target:d.target,
+    enabled:true,
+    createdAt:d.now,
+    updatedAt:d.now
+  };
+}
+
+export async function listDeliveryDestinations(db, watchlistId) {
+  requireDb(db);
+  const out=await db.prepare(
+    `SELECT id, watchlist_id, channel, target, enabled, created_at, updated_at
+     FROM delivery_destinations
+     WHERE watchlist_id = ? AND enabled = 1
+     ORDER BY created_at ASC`
+  ).bind(watchlistId).all();
+  return (out.results || []).map(x=>({
+    id:x.id,
+    watchlistId:x.watchlist_id,
+    channel:x.channel,
+    target:x.target,
+    enabled:Boolean(x.enabled),
+    createdAt:x.created_at,
+    updatedAt:x.updated_at
+  }));
+}
+
+export async function createMonitorRun(db, run) {
+  requireDb(db);
+  await db.prepare(
+    `INSERT INTO monitor_runs
+      (id, scheduled_at, started_at, completed_at, status, positions_total, positions_checked,
+       events_created, deliveries_attempted, deliveries_succeeded, error_count, errors_json)
+     VALUES (?, ?, ?, NULL, 'RUNNING', ?, 0, 0, 0, 0, 0, '[]')`
+  ).bind(run.id,run.scheduledAt,run.startedAt,run.positionsTotal).run();
+  return run;
+}
+
+export async function completeMonitorRun(db, run) {
+  requireDb(db);
+  await db.prepare(
+    `UPDATE monitor_runs
+     SET completed_at = ?, status = ?, positions_checked = ?, events_created = ?,
+         deliveries_attempted = ?, deliveries_succeeded = ?, error_count = ?, errors_json = ?
+     WHERE id = ?`
+  ).bind(
+    run.completedAt,run.status,run.positionsChecked,run.eventsCreated,
+    run.deliveriesAttempted,run.deliveriesSucceeded,run.errorCount,
+    JSON.stringify(run.errors || []),run.id
+  ).run();
+  return run;
+}
+
+export async function saveDeliveryAttempt(db, d) {
+  requireDb(db);
+  await db.prepare(
+    `INSERT INTO deliveries
+      (id, event_id, destination_id, channel, target, status, provider_message_id, error, attempted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    d.id,d.eventId,d.destinationId,d.channel,d.target,d.status,
+    d.providerMessageId,d.error,d.attemptedAt
+  ).run();
+  return d;
+}
