@@ -1,4 +1,4 @@
-# DeFi Guard — v0.3
+# DeFi Guard — v0.4
 
 Read-only DeFi position monitoring with persistent watchlists, scheduled checks, change detection and explainable alert delivery.
 
@@ -98,6 +98,19 @@ See:
 - `docs/D1_DEPLOYMENT.md`
 - `docs/MONITORING_DELIVERY.md`
 
+## BUILD-004 — Live Risk Monitor Adapter + End-to-End Beta Gate
+
+Implemented in code:
+- native adapter for `DeFi-Risk-Monitor` account snapshots;
+- Aave v3 / Ethereum scope validation;
+- current position LTV derived from debt/collateral rather than confusing it with Aave max-LTV;
+- fail-closed upstream payload validation;
+- provider mode diagnostics;
+- backward-compatible generic POST provider;
+- adapter and transition integration tests.
+
+See `docs/LIVE_RISK_MONITOR_ADAPTER.md`.
+
 ## BUILD-003 Definition of Done
 
 ### Code
@@ -114,7 +127,7 @@ See:
 - [x] Delivery audit persistence.
 - [x] Destination API.
 - [x] Unit tests for delivery policy.
-- [ ] GitHub Actions PASS.
+- [x] GitHub Actions PASS.
 
 ### Deployment / Revenue Gate
 - [ ] Real D1 database bound as `DB`.
@@ -134,7 +147,7 @@ Never commit secrets.
 
 Runtime configuration may include:
 
-- `SNAPSHOT_PROVIDER_URL`
+- `SNAPSHOT_PROVIDER_KIND` — `generic-post` (default) or `defi-risk-monitor`\n- `SNAPSHOT_PROVIDER_URL`
 - `SNAPSHOT_PROVIDER_TOKEN` — secret if used
 - `RESEND_API_KEY` — secret
 - `ALERT_EMAIL_FROM`

@@ -1,7 +1,13 @@
 # Local/development placeholders only.
 # Copy to .dev.vars and fill values locally. Never commit real secrets.
 
-SNAPSHOT_PROVIDER_URL=https://example.com/internal/defi-position-snapshot
+# Existing generic provider mode (default):
+# SNAPSHOT_PROVIDER_KIND=generic-post
+# SNAPSHOT_PROVIDER_URL=https://example.com/internal/defi-position-snapshot
+
+# BUILD-004 reuse path:
+SNAPSHOT_PROVIDER_KIND=defi-risk-monitor
+SNAPSHOT_PROVIDER_URL=https://example.com
 SNAPSHOT_PROVIDER_TOKEN=replace-me
 
 RESEND_API_KEY=re_replace_me
