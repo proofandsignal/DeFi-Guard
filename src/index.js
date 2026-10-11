@@ -31,7 +31,8 @@ export default {
         service:'defi-guard',
         version:VERSION,
         persistence:Boolean(env?.DB),
-        snapshotProvider:Boolean(env?.SNAPSHOT_PROVIDER_URL),\n        snapshotProviderKind:String(env?.SNAPSHOT_PROVIDER_KIND || 'generic-post'),
+        snapshotProvider:Boolean(env?.SNAPSHOT_PROVIDER_URL),
+        snapshotProviderKind:String(env?.SNAPSHOT_PROVIDER_KIND || 'generic-post'),
         emailDelivery:Boolean(env?.RESEND_API_KEY && env?.ALERT_EMAIL_FROM)
       });
     }
