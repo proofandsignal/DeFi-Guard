@@ -60,7 +60,7 @@ test('risk monitor adapter feeds deterministic Guard transition detection',async
 
     const change=detectAlertChange(first.alertState,second.alertState);
     assert.equal(change.changed,true);
-    assert.equal(change.eventType,'DETERIORATED');
+    assert.equal(change.eventType,'RISK_ESCALATED');
   }finally{
     globalThis.fetch=originalFetch;
   }
