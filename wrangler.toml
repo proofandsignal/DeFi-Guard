@@ -8,3 +8,5 @@ crons = ["*/5 * * * *"]
 
 [vars]
 MONITOR_BATCH_SIZE = "100"
+SNAPSHOT_PROVIDER_KIND = "defi-risk-monitor"
+SNAPSHOT_PROVIDER_URL = "https://defi-risk-monitor-api.onrender.com"
