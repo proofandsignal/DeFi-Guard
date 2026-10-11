@@ -10,3 +10,8 @@ crons = ["*/5 * * * *"]
 MONITOR_BATCH_SIZE = "100"
 SNAPSHOT_PROVIDER_KIND = "defi-risk-monitor"
 SNAPSHOT_PROVIDER_URL = "https://defi-risk-monitor-api.onrender.com"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "defi-guard-beta"
+database_id = "5128d2e3-fefd-44a2-921a-935ae65c4585"
