@@ -296,3 +296,34 @@ export async function saveDeliveryAttempt(db, d) {
   ).run();
   return d;
 }
+
+
+export async function listDeliveriesForPosition(db, positionId, limit = 50) {
+  requireDb(db);
+  const safeLimit=Math.max(1,Math.min(200,Number(limit)||50));
+  const out=await db.prepare(
+    `SELECT d.id, d.event_id, d.destination_id, d.channel, d.target, d.status,
+            d.provider_message_id, d.error, d.attempted_at,
+            e.event_type, e.previous_state, e.current_state
+     FROM deliveries d
+     JOIN alert_events e ON e.id = d.event_id
+     WHERE e.position_id = ?
+     ORDER BY d.attempted_at DESC
+     LIMIT ?`
+  ).bind(positionId,safeLimit).all();
+
+  return (out.results || []).map(x=>({
+    id:x.id,
+    eventId:x.event_id,
+    destinationId:x.destination_id,
+    channel:x.channel,
+    target:x.target,
+    status:x.status,
+    providerMessageId:x.provider_message_id,
+    error:x.error,
+    attemptedAt:x.attempted_at,
+    eventType:x.event_type,
+    previousState:x.previous_state,
+    currentState:x.current_state
+  }));
+}

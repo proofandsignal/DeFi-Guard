@@ -20,9 +20,10 @@ jobs:
   live-smoke:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       GUARD_URL: "https://defi-guard.digitaldragoworkspace.workers.dev"
+      WEBHOOK_SINK_URL: "https://defi-guard-webhook-sink.digitaldragoworkspace.workers.dev/hook"
       RISK_MONITOR_URL: "https://defi-risk-monitor-api.onrender.com"
       DEFAULT_WALLET: "0x7a447c0a0ca7a786224bc2d27347b257e246eb1d"
 
@@ -175,4 +176,142 @@ jobs:
           }
 
           throw new Error('scheduled_snapshot_not_persisted_within_10_minutes');
+          NODE
+
+
+      - name: Add webhook destination
+        env:
+          WATCHLIST_ID: ${{ steps.bootstrap.outputs.watchlist_id }}
+          OWNER_KEY: ${{ steps.bootstrap.outputs.owner_key }}
+        run: |
+          node <<'NODE'
+          const response=await fetch(
+            `${process.env.GUARD_URL}/api/v1/watchlists/${process.env.WATCHLIST_ID}/destinations`,
+            {
+              method:'POST',
+              headers:{
+                'content-type':'application/json',
+                'x-guard-owner-key':process.env.OWNER_KEY
+              },
+              body:JSON.stringify({
+                channel:'webhook',
+                target:process.env.WEBHOOK_SINK_URL
+              })
+            }
+          );
+          const text=await response.text();
+          if(!response.ok) throw new Error(`destination_http_${response.status}:${text.slice(0,300)}`);
+          console.log(text);
+          NODE
+
+      - name: Seed controlled WARNING state
+        env:
+          POSITION_ID: ${{ steps.bootstrap.outputs.position_id }}
+          OWNER_KEY: ${{ steps.bootstrap.outputs.owner_key }}
+        run: |
+          node <<'NODE'
+          const response=await fetch(
+            `${process.env.GUARD_URL}/api/v1/positions/${process.env.POSITION_ID}/snapshots`,
+            {
+              method:'POST',
+              headers:{
+                'content-type':'application/json',
+                'x-guard-owner-key':process.env.OWNER_KEY
+              },
+              body:JSON.stringify({
+                healthFactor:1.10,
+                collateralValueUsd:100000,
+                debtValueUsd:60000,
+                ltvPct:60,
+                liquidationThresholdPct:80,
+                dataState:'SUFFICIENT',
+                updatedAt:new Date().toISOString()
+              })
+            }
+          );
+          const text=await response.text();
+          if(!response.ok) throw new Error(`seed_warning_http_${response.status}:${text.slice(0,300)}`);
+          const body=JSON.parse(text);
+          if(body.snapshot?.alertState!=='WARNING'){
+            throw new Error(`controlled_warning_not_created:${text.slice(0,300)}`);
+          }
+          console.log(JSON.stringify({
+            alertState:body.snapshot.alertState,
+            eventType:body.change?.eventType,
+            controlled:true
+          }));
+          NODE
+
+      - name: Wait for cron and verify webhook delivery
+        id: delivery
+        env:
+          POSITION_ID: ${{ steps.bootstrap.outputs.position_id }}
+          OWNER_KEY: ${{ steps.bootstrap.outputs.owner_key }}
+        run: |
+          node <<'NODE'
+          const fs=await import('node:fs');
+          const headers={'x-guard-owner-key':process.env.OWNER_KEY};
+          const url=`${process.env.GUARD_URL}/api/v1/positions/${process.env.POSITION_ID}/deliveries`;
+
+          for(let attempt=1; attempt<=14; attempt++){
+            const response=await fetch(url,{headers});
+            const text=await response.text();
+            if(!response.ok) throw new Error(`deliveries_http_${response.status}:${text.slice(0,300)}`);
+
+            const deliveries=JSON.parse(text).data || [];
+            const sent=deliveries.find(d =>
+              d.channel==='webhook' &&
+              d.status==='SENT' &&
+              d.eventType==='RISK_IMPROVED' &&
+              d.previousState==='WARNING' &&
+              d.currentState==='OK' &&
+              String(d.providerMessageId || '').startsWith('sink-')
+            );
+
+            if(sent){
+              console.log(JSON.stringify({
+                deliveryId:sent.id,
+                status:sent.status,
+                eventType:sent.eventType,
+                previousState:sent.previousState,
+                currentState:sent.currentState,
+                providerMessageId:sent.providerMessageId,
+                targetHint:sent.targetHint
+              }));
+              fs.appendFileSync(process.env.GITHUB_OUTPUT,`delivery_count=${deliveries.length}\n`);
+              process.exit(0);
+            }
+
+            console.log(`No successful webhook yet (attempt ${attempt}/14); waiting 30s...`);
+            await new Promise(resolve=>setTimeout(resolve,30000));
+          }
+
+          throw new Error('webhook_delivery_not_confirmed_within_7_minutes');
+          NODE
+
+      - name: Verify next unchanged cron stays silent
+        env:
+          POSITION_ID: ${{ steps.bootstrap.outputs.position_id }}
+          OWNER_KEY: ${{ steps.bootstrap.outputs.owner_key }}
+          DELIVERY_COUNT: ${{ steps.delivery.outputs.delivery_count }}
+        run: |
+          sleep 330
+          node <<'NODE'
+          const response=await fetch(
+            `${process.env.GUARD_URL}/api/v1/positions/${process.env.POSITION_ID}/deliveries`,
+            {headers:{'x-guard-owner-key':process.env.OWNER_KEY}}
+          );
+          const text=await response.text();
+          if(!response.ok) throw new Error(`deliveries_http_${response.status}:${text.slice(0,300)}`);
+          const deliveries=JSON.parse(text).data || [];
+          const before=Number(process.env.DELIVERY_COUNT);
+          if(deliveries.length!==before){
+            throw new Error(`duplicate_delivery_detected:before=${before},after=${deliveries.length}`);
+          }
+          console.log(JSON.stringify({
+            deliveriesBefore:before,
+            deliveriesAfter:deliveries.length,
+            duplicateDeliveries:0,
+            unchangedCronSilent:true
+          }));
           NODE

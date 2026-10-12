@@ -1,0 +1,4 @@
+name = "defi-guard-webhook-sink"
+main = "validation/webhook-sink.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
