@@ -1,11 +1,11 @@
 name: DeFi Guard Live Beta Smoke
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/live-beta-smoke.yml"
+  workflow_run:
+    workflows:
+      - Deploy DeFi Guard to Cloudflare
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       wallet:
@@ -18,11 +18,10 @@ permissions:
 
 jobs:
   live-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       GUARD_URL: "https://defi-guard.digitaldragoworkspace.workers.dev"
       RISK_MONITOR_URL: "https://defi-risk-monitor-api.onrender.com"
       DEFAULT_WALLET: "0x7a447c0a0ca7a786224bc2d27347b257e246eb1d"
@@ -39,9 +38,11 @@ jobs:
 
       - name: Resolve wallet
         id: wallet
+        env:
+          INPUT_WALLET: ${{ inputs.wallet }}
         shell: bash
         run: |
-          WALLET="${{ github.event.inputs.wallet }}"
+          WALLET="$INPUT_WALLET"
           if [ -z "$WALLET" ]; then
             WALLET="$DEFAULT_WALLET"
           fi
@@ -116,7 +117,11 @@ jobs:
           }
           const position = JSON.parse(positionText);
 
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `watchlist_id=${watchlist.id}\nposition_id=${position.id}\n`);
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `watchlist_id=${watchlist.id}\nposition_id=${position.id}\nowner_key=${ownerKey}\n`
+          );
+
           console.log(JSON.stringify({
             watchlistId: watchlist.id,
             positionId: position.id,
@@ -127,49 +132,47 @@ jobs:
           }));
           NODE
 
-      - name: Wait for scheduled cron
-        run: sleep 420
-
-      - name: Verify D1 received a live snapshot
+      - name: Wait for cron and verify latest snapshot through Guard API
         env:
           POSITION_ID: ${{ steps.bootstrap.outputs.position_id }}
+          OWNER_KEY: ${{ steps.bootstrap.outputs.owner_key }}
         run: |
-          SQL="SELECT p.id AS position_id, p.last_checked_at, p.last_error, COUNT(s.id) AS snapshot_count, MAX(s.observed_at) AS latest_observed_at FROM positions p LEFT JOIN snapshots s ON s.position_id = p.id WHERE p.id = '$POSITION_ID' GROUP BY p.id, p.last_checked_at, p.last_error;"
-          npx wrangler d1 execute defi-guard-beta --remote --command "$SQL" --json > /tmp/d1-result.json
-
           node <<'NODE'
-          const fs = await import('node:fs');
-          const raw = JSON.parse(fs.readFileSync('/tmp/d1-result.json', 'utf8'));
+          const positionId = process.env.POSITION_ID;
+          const ownerKey = process.env.OWNER_KEY;
+          const url = `${process.env.GUARD_URL}/api/v1/positions/${positionId}/snapshots/latest`;
 
-          function findRow(value) {
-            if (Array.isArray(value)) {
-              for (const item of value) {
-                const found = findRow(item);
-                if (found) return found;
-              }
-              return null;
+          const maxAttempts = 20;
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const response = await fetch(url, {
+              headers: { 'x-guard-owner-key': ownerKey }
+            });
+            const text = await response.text();
+
+            if (!response.ok) {
+              throw new Error(`guard_latest_snapshot_http_${response.status}:${text.slice(0,300)}`);
             }
-            if (value && typeof value === 'object') {
-              if ('snapshot_count' in value && 'position_id' in value) return value;
-              for (const child of Object.values(value)) {
-                const found = findRow(child);
-                if (found) return found;
-              }
+
+            const body = JSON.parse(text);
+            if (body.data) {
+              const s = body.data;
+              console.log(JSON.stringify({
+                positionId: s.positionId,
+                observedAt: s.observedAt,
+                alertState: s.alertState,
+                healthFactor: s.healthFactor,
+                createdAt: s.createdAt
+              }));
+
+              if (s.positionId !== positionId) throw new Error('snapshot_position_mismatch');
+              if (!s.observedAt) throw new Error('snapshot_observed_at_missing');
+              if (!s.createdAt) throw new Error('snapshot_created_at_missing');
+              process.exit(0);
             }
-            return null;
+
+            console.log(`No scheduled snapshot yet (attempt ${attempt}/${maxAttempts}); waiting 30s...`);
+            await new Promise(resolve => setTimeout(resolve, 30_000));
           }
 
-          const row = findRow(raw);
-          if (!row) throw new Error('d1_verification_row_missing');
-          console.log(JSON.stringify(row));
-
-          if (!(Number(row.snapshot_count) >= 1)) {
-            throw new Error('scheduled_snapshot_not_persisted');
-          }
-          if (!row.last_checked_at) {
-            throw new Error('position_last_checked_at_missing');
-          }
-          if (row.last_error) {
-            throw new Error(`position_last_error:${row.last_error}`);
-          }
+          throw new Error('scheduled_snapshot_not_persisted_within_10_minutes');
           NODE
