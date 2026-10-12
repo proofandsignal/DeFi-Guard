@@ -21,7 +21,7 @@ export async function deliverAlert(destination, context, env) {
 async function deliverWebhook(destination,context,env){
   const headers={
     'content-type':'application/json',
-    'user-agent':'DeFi-Guard/0.3',
+    'user-agent':'DeFi-Guard/0.4',
     'x-defi-guard-event-id':String(context.event?.id || '')
   };
   if(env?.WEBHOOK_BEARER_TOKEN){
@@ -35,7 +35,7 @@ async function deliverWebhook(destination,context,env){
       headers,
       body:JSON.stringify({
         service:'DeFi Guard',
-        version:'0.3.0',
+        version:'0.4.0',
         event:context.event,
         change:context.change,
         position:publicPosition(context.position),
