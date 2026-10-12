@@ -8,7 +8,7 @@ test('webhook delivery posts Guard event payload and captures request id', async
 
   globalThis.fetch=async (url,init) => {
     captured={url,init};
-    return new Response('',{
+    return new Response(null,{
       status:204,
       headers:{'x-request-id':'req-live-smoke-1'}
     });
