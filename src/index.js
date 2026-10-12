@@ -14,7 +14,8 @@ import {
   saveAlertEvent,
   listAlertEvents,
   createDeliveryDestination,
-  listDeliveryDestinations
+  listDeliveryDestinations,
+  listDeliveriesForPosition
 } from './store.js';
 
 const VERSION = '0.4.0';
@@ -215,6 +216,18 @@ export default {
       return json({snapshot,change,event},{status:201});
     }
 
+    const deliveriesMatch=url.pathname.match(/^\/api\/v1\/positions\/([^/]+)\/deliveries$/);
+    if(deliveriesMatch && request.method==='GET'){
+      if (!env?.DB) return dbMissing();
+      const ownerKey=await ownerHash(request);
+      if(!ownerKey) return json({error:'owner_key_required'},{status:401});
+      const positionId=decodeURIComponent(deliveriesMatch[1]);
+      const position=await ownedPosition(env.DB,positionId,ownerKey);
+      if(!position) return json({error:'position_not_found'},{status:404});
+      const rows=await listDeliveriesForPosition(env.DB,positionId,url.searchParams.get('limit'));
+      return json({data:rows.map(publicDelivery)});
+    }
+
     const eventsMatch=url.pathname.match(/^\/api\/v1\/positions\/([^/]+)\/events$/);
     if(eventsMatch && request.method==='GET'){
       if (!env?.DB) return dbMissing();
@@ -282,6 +295,24 @@ function publicDestination(destination){
     }
   }
   const {target:_,...rest}=destination;
+  return {...rest,targetHint};
+}
+
+function publicDelivery(delivery){
+  const target=String(delivery.target || '');
+  let targetHint='***';
+  if(delivery.channel==='email'){
+    const [local,domain]=target.split('@');
+    targetHint=domain ? `${String(local || '').slice(0,2)}***@${domain}` : '***';
+  }else if(delivery.channel==='webhook'){
+    try{
+      const u=new URL(target);
+      targetHint=`${u.origin}/…`;
+    }catch{
+      targetHint='https://…';
+    }
+  }
+  const {target:_,...rest}=delivery;
   return {...rest,targetHint};
 }
 
