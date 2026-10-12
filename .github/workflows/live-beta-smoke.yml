@@ -1,0 +1,175 @@
+name: DeFi Guard Live Beta Smoke
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/live-beta-smoke.yml"
+  workflow_dispatch:
+    inputs:
+      wallet:
+        description: "Public Ethereum wallet with an active Aave v3 position"
+        required: false
+        default: "0x7a447c0a0ca7a786224bc2d27347b257e246eb1d"
+
+permissions:
+  contents: read
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GUARD_URL: "https://defi-guard.digitaldragoworkspace.workers.dev"
+      RISK_MONITOR_URL: "https://defi-risk-monitor-api.onrender.com"
+      DEFAULT_WALLET: "0x7a447c0a0ca7a786224bc2d27347b257e246eb1d"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm install
+
+      - name: Resolve wallet
+        id: wallet
+        shell: bash
+        run: |
+          WALLET="${{ github.event.inputs.wallet }}"
+          if [ -z "$WALLET" ]; then
+            WALLET="$DEFAULT_WALLET"
+          fi
+          echo "wallet=$WALLET" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight live Aave position
+        env:
+          WALLET: ${{ steps.wallet.outputs.wallet }}
+        run: |
+          node <<'NODE'
+          const wallet = process.env.WALLET;
+          const url = `${process.env.RISK_MONITOR_URL}/api/v1/aave/account/${wallet}`;
+          const response = await fetch(url);
+          const text = await response.text();
+          if (!response.ok) throw new Error(`risk_monitor_http_${response.status}:${text.slice(0,300)}`);
+          const body = JSON.parse(text);
+          const s = body.snapshot;
+          if (!s) throw new Error("snapshot_missing");
+          if (!(Number(s.totalDebtBase) > 0)) throw new Error("wallet_has_no_active_aave_debt");
+          if (!Number.isFinite(Number(s.healthFactor))) throw new Error("health_factor_missing");
+          console.log(JSON.stringify({
+            wallet: s.wallet,
+            chainId: s.chainId,
+            totalCollateralBase: s.totalCollateralBase,
+            totalDebtBase: s.totalDebtBase,
+            healthFactor: s.healthFactor,
+            observedAt: s.observedAt
+          }));
+          NODE
+
+      - name: Create live beta watchlist and position
+        id: bootstrap
+        env:
+          WALLET: ${{ steps.wallet.outputs.wallet }}
+        run: |
+          node <<'NODE'
+          const fs = await import('node:fs');
+          const crypto = await import('node:crypto');
+
+          const ownerKey = crypto.randomBytes(32).toString('hex');
+          console.log(`::add-mask::${ownerKey}`);
+
+          const headers = {
+            'content-type': 'application/json',
+            'x-guard-owner-key': ownerKey
+          };
+
+          const watchlistResponse = await fetch(`${process.env.GUARD_URL}/api/v1/watchlists`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ label: 'BUILD-008 Live Aave Smoke' })
+          });
+          const watchlistText = await watchlistResponse.text();
+          if (!watchlistResponse.ok) {
+            throw new Error(`watchlist_http_${watchlistResponse.status}:${watchlistText.slice(0,300)}`);
+          }
+          const watchlist = JSON.parse(watchlistText);
+
+          const positionResponse = await fetch(`${process.env.GUARD_URL}/api/v1/watchlists/${watchlist.id}/positions`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              walletAddress: process.env.WALLET,
+              protocol: 'aave-v3',
+              chain: 'ethereum',
+              asset: 'ACCOUNT'
+            })
+          });
+          const positionText = await positionResponse.text();
+          if (!positionResponse.ok) {
+            throw new Error(`position_http_${positionResponse.status}:${positionText.slice(0,300)}`);
+          }
+          const position = JSON.parse(positionText);
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `watchlist_id=${watchlist.id}\nposition_id=${position.id}\n`);
+          console.log(JSON.stringify({
+            watchlistId: watchlist.id,
+            positionId: position.id,
+            walletAddress: position.walletAddress,
+            protocol: position.protocol,
+            chain: position.chain,
+            asset: position.asset
+          }));
+          NODE
+
+      - name: Wait for scheduled cron
+        run: sleep 420
+
+      - name: Verify D1 received a live snapshot
+        env:
+          POSITION_ID: ${{ steps.bootstrap.outputs.position_id }}
+        run: |
+          SQL="SELECT p.id AS position_id, p.last_checked_at, p.last_error, COUNT(s.id) AS snapshot_count, MAX(s.observed_at) AS latest_observed_at FROM positions p LEFT JOIN snapshots s ON s.position_id = p.id WHERE p.id = '$POSITION_ID' GROUP BY p.id, p.last_checked_at, p.last_error;"
+          npx wrangler d1 execute defi-guard-beta --remote --command "$SQL" --json > /tmp/d1-result.json
+
+          node <<'NODE'
+          const fs = await import('node:fs');
+          const raw = JSON.parse(fs.readFileSync('/tmp/d1-result.json', 'utf8'));
+
+          function findRow(value) {
+            if (Array.isArray(value)) {
+              for (const item of value) {
+                const found = findRow(item);
+                if (found) return found;
+              }
+              return null;
+            }
+            if (value && typeof value === 'object') {
+              if ('snapshot_count' in value && 'position_id' in value) return value;
+              for (const child of Object.values(value)) {
+                const found = findRow(child);
+                if (found) return found;
+              }
+            }
+            return null;
+          }
+
+          const row = findRow(raw);
+          if (!row) throw new Error('d1_verification_row_missing');
+          console.log(JSON.stringify(row));
+
+          if (!(Number(row.snapshot_count) >= 1)) {
+            throw new Error('scheduled_snapshot_not_persisted');
+          }
+          if (!row.last_checked_at) {
+            throw new Error('position_last_checked_at_missing');
+          }
+          if (row.last_error) {
+            throw new Error(`position_last_error:${row.last_error}`);
+          }
+          NODE
