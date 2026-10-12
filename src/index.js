@@ -152,6 +152,18 @@ export default {
       }
     }
 
+    const latestSnapshotMatch=url.pathname.match(/^\/api\/v1\/positions\/([^/]+)\/snapshots\/latest$/);
+    if(latestSnapshotMatch && request.method==='GET'){
+      if (!env?.DB) return dbMissing();
+      const ownerKey=await ownerHash(request);
+      if(!ownerKey) return json({error:'owner_key_required'},{status:401});
+      const positionId=decodeURIComponent(latestSnapshotMatch[1]);
+      const position=await ownedPosition(env.DB,positionId,ownerKey);
+      if(!position) return json({error:'position_not_found'},{status:404});
+      const snapshot=await latestSnapshot(env.DB,positionId);
+      return json({data:snapshot});
+    }
+
     const snapshotMatch=url.pathname.match(/^\/api\/v1\/positions\/([^/]+)\/snapshots$/);
     if(snapshotMatch && request.method==='POST'){
       if (!env?.DB) return dbMissing();
