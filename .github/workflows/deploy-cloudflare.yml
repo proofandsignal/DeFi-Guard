@@ -1,6 +1,9 @@
 name: Deploy DeFi Guard to Cloudflare
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
