@@ -37,6 +37,33 @@ jobs:
       - name: Install
         run: npm install
 
+      - name: Preflight webhook validation sink
+        run: |
+          node <<'NODE'
+          const eventId='smoke-preflight';
+          const response=await fetch(process.env.WEBHOOK_SINK_URL,{
+            method:'POST',
+            headers:{
+              'content-type':'application/json',
+              'x-defi-guard-event-id':eventId
+            },
+            body:JSON.stringify({
+              service:'DeFi Guard',
+              event:{id:eventId},
+              change:{eventType:'PREFLIGHT'}
+            })
+          });
+          const text=await response.text();
+          const requestId=response.headers.get('x-request-id');
+          if(response.status!==204){
+            throw new Error(`webhook_sink_preflight_http_${response.status}:${text.slice(0,300)}`);
+          }
+          if(requestId!==`sink-${eventId}`){
+            throw new Error(`webhook_sink_preflight_ack_invalid:${requestId || 'missing'}`);
+          }
+          console.log(JSON.stringify({status:response.status,requestId}));
+          NODE
+
       - name: Resolve wallet
         id: wallet
         env:
@@ -251,14 +278,46 @@ jobs:
           node <<'NODE'
           const fs=await import('node:fs');
           const headers={'x-guard-owner-key':process.env.OWNER_KEY};
-          const url=`${process.env.GUARD_URL}/api/v1/positions/${process.env.POSITION_ID}/deliveries`;
+          const deliveriesUrl=`${process.env.GUARD_URL}/api/v1/positions/${process.env.POSITION_ID}/deliveries`;
+          const snapshotUrl=`${process.env.GUARD_URL}/api/v1/positions/${process.env.POSITION_ID}/snapshots/latest`;
 
-          for(let attempt=1; attempt<=14; attempt++){
-            const response=await fetch(url,{headers});
-            const text=await response.text();
-            if(!response.ok) throw new Error(`deliveries_http_${response.status}:${text.slice(0,300)}`);
+          for(let attempt=1; attempt<=20; attempt++){
+            const [deliveryResponse,snapshotResponse]=await Promise.all([
+              fetch(deliveriesUrl,{headers}),
+              fetch(snapshotUrl,{headers})
+            ]);
+            const [deliveryText,snapshotText]=await Promise.all([
+              deliveryResponse.text(),
+              snapshotResponse.text()
+            ]);
 
-            const deliveries=JSON.parse(text).data || [];
+            if(!deliveryResponse.ok){
+              throw new Error(`deliveries_http_${deliveryResponse.status}:${deliveryText.slice(0,300)}`);
+            }
+            if(!snapshotResponse.ok){
+              throw new Error(`snapshot_http_${snapshotResponse.status}:${snapshotText.slice(0,300)}`);
+            }
+
+            const deliveries=JSON.parse(deliveryText).data || [];
+            const snapshot=JSON.parse(snapshotText).data || null;
+
+            console.log(JSON.stringify({
+              attempt,
+              snapshot: snapshot ? {
+                alertState:snapshot.alertState,
+                observedAt:snapshot.observedAt,
+                healthFactor:snapshot.healthFactor
+              } : null,
+              deliveries:deliveries.map(d=>({
+                status:d.status,
+                eventType:d.eventType,
+                previousState:d.previousState,
+                currentState:d.currentState,
+                providerMessageId:d.providerMessageId,
+                error:d.error
+              }))
+            }));
+
             const sent=deliveries.find(d =>
               d.channel==='webhook' &&
               d.status==='SENT' &&
@@ -282,11 +341,22 @@ jobs:
               process.exit(0);
             }
 
-            console.log(`No successful webhook yet (attempt ${attempt}/14); waiting 30s...`);
+            const failedImprovement=deliveries.find(d =>
+              d.channel==='webhook' &&
+              d.status==='FAILED' &&
+              d.eventType==='RISK_IMPROVED' &&
+              d.previousState==='WARNING' &&
+              d.currentState==='OK'
+            );
+            if(failedImprovement){
+              throw new Error(`webhook_delivery_failed:${failedImprovement.error || 'unknown'}`);
+            }
+
+            console.log(`No successful webhook yet (attempt ${attempt}/20); waiting 30s...`);
             await new Promise(resolve=>setTimeout(resolve,30000));
           }
 
-          throw new Error('webhook_delivery_not_confirmed_within_7_minutes');
+          throw new Error('webhook_delivery_not_confirmed_within_10_minutes');
           NODE
 
       - name: Verify next unchanged cron stays silent
