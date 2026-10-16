@@ -1,6 +1,7 @@
 import { evaluatePosition } from './core/guard.js';
 import { detectAlertChange } from './core/change.js';
 import { shouldDeliver } from './core/delivery-policy.js';
+import { normalizeMaxDeliveryAttempts, retryDecision } from './core/retry-policy.js';
 import { fetchPositionSnapshot } from './provider.js';
 import { deliverAlert } from './delivery.js';
 import {
@@ -12,7 +13,8 @@ import {
   createMonitorRun,
   completeMonitorRun,
   saveDeliveryAttempt,
-  updatePositionCheck
+  updatePositionCheck,
+  listRetryableDeliveries
 } from './store.js';
 
 export async function runScheduledMonitoring(env, scheduledAt = new Date().toISOString()) {
@@ -49,6 +51,15 @@ export async function runScheduledMonitoring(env, scheduledAt = new Date().toISO
     errorCount:0,
     errors:[]
   };
+
+  const retryResult=await retryPendingDeliveries(env);
+  stats.deliveriesAttempted+=retryResult.deliveriesAttempted;
+  stats.deliveriesSucceeded+=retryResult.deliveriesSucceeded;
+  if(retryResult.errors.length){
+    stats.errorCount+=retryResult.errors.length;
+    stats.status='PARTIAL';
+    stats.errors.push(...retryResult.errors);
+  }
 
   for(const position of positions){
     try{
@@ -156,4 +167,76 @@ export async function monitorPosition(env, position) {
     deliveriesAttempted,
     deliveriesSucceeded
   };
+}
+
+
+export async function retryPendingDeliveries(env) {
+  if(!env?.DB){
+    return {deliveriesAttempted:0,deliveriesSucceeded:0,errors:[]};
+  }
+
+  const maxAttempts=normalizeMaxDeliveryAttempts(env.DELIVERY_RETRY_MAX_ATTEMPTS,3);
+  const limit=Math.max(1,Math.min(200,Number(env.DELIVERY_RETRY_BATCH_SIZE || 50)));
+  const pending=await listRetryableDeliveries(env.DB,{limit,maxAttempts});
+  const result={
+    deliveriesAttempted:0,
+    deliveriesSucceeded:0,
+    errors:[]
+  };
+
+  for(const item of pending){
+    const decision=retryDecision(item.failedAttempts,maxAttempts);
+    if(!decision.retry) continue;
+
+    result.deliveriesAttempted++;
+
+    try{
+      const delivery=await deliverAlert(
+        item.destination,
+        {
+          event:item.event,
+          change:item.change,
+          position:item.position,
+          evaluation:item.evaluation,
+          snapshot:item.snapshot
+        },
+        env,
+        {attemptNumber:decision.nextAttempt}
+      );
+
+      if(delivery.ok) result.deliveriesSucceeded++;
+
+      await saveDeliveryAttempt(env.DB,{
+        id:crypto.randomUUID(),
+        eventId:item.event.id,
+        destinationId:item.destination.id,
+        channel:item.destination.channel,
+        target:item.destination.target,
+        status:delivery.ok ? 'SENT' : 'FAILED',
+        providerMessageId:delivery.providerMessageId || null,
+        error:delivery.error || null,
+        attemptedAt:new Date().toISOString()
+      });
+
+      if(!delivery.ok){
+        result.errors.push({
+          type:'delivery_retry_failed',
+          eventId:item.event.id,
+          destinationId:item.destination.id,
+          attemptNumber:decision.nextAttempt,
+          error:String(delivery.error || 'delivery_failed').slice(0,500)
+        });
+      }
+    }catch(error){
+      result.errors.push({
+        type:'delivery_retry_exception',
+        eventId:item.event.id,
+        destinationId:item.destination.id,
+        attemptNumber:decision.nextAttempt,
+        error:String(error?.message || error).slice(0,500)
+      });
+    }
+  }
+
+  return result;
 }
