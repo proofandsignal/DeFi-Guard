@@ -27,6 +27,17 @@ export default {
       return new Response('event_type_required',{status:400});
     }
 
+    if(url.searchParams.get('fail-first')==='1'){
+      const attempt=Number(request.headers.get('x-defi-guard-delivery-attempt') || 0);
+      const deliveryKey=String(request.headers.get('x-defi-guard-delivery-key') || '').trim();
+      if(!deliveryKey){
+        return new Response('delivery_key_required',{status:400});
+      }
+      if(attempt===1){
+        return new Response('controlled_first_attempt_failure',{status:503});
+      }
+    }
+
     return new Response(null,{
       status:204,
       headers:{'x-request-id':`sink-${eventId}`}
