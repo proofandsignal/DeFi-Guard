@@ -52,13 +52,22 @@ export async function runScheduledMonitoring(env, scheduledAt = new Date().toISO
     errors:[]
   };
 
-  const retryResult=await retryPendingDeliveries(env);
-  stats.deliveriesAttempted+=retryResult.deliveriesAttempted;
-  stats.deliveriesSucceeded+=retryResult.deliveriesSucceeded;
-  if(retryResult.errors.length){
-    stats.errorCount+=retryResult.errors.length;
+  try{
+    const retryResult=await retryPendingDeliveries(env);
+    stats.deliveriesAttempted+=retryResult.deliveriesAttempted;
+    stats.deliveriesSucceeded+=retryResult.deliveriesSucceeded;
+    if(retryResult.errors.length){
+      stats.errorCount+=retryResult.errors.length;
+      stats.status='PARTIAL';
+      stats.errors.push(...retryResult.errors);
+    }
+  }catch(error){
+    stats.errorCount++;
     stats.status='PARTIAL';
-    stats.errors.push(...retryResult.errors);
+    stats.errors.push({
+      type:'delivery_retry_scan_failed',
+      error:String(error?.message || error).slice(0,500)
+    });
   }
 
   for(const position of positions){
@@ -83,7 +92,7 @@ export async function runScheduledMonitoring(env, scheduledAt = new Date().toISO
   }
 
   stats.completedAt=new Date().toISOString();
-  if(stats.errorCount===positions.length && positions.length>0) stats.status='FAILED';
+  if(stats.positionsChecked===0 && positions.length>0) stats.status='FAILED';
   await completeMonitorRun(env.DB,stats);
   return stats;
 }
