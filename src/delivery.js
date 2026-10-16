@@ -1,6 +1,7 @@
 import { alertSubject, alertText, validateDeliveryTarget } from './core/delivery-policy.js';
+import { deliveryKey } from './core/retry-policy.js';
 
-export async function deliverAlert(destination, context, env) {
+export async function deliverAlert(destination, context, env, options = {}) {
   const channel=String(destination?.channel || '').toLowerCase();
   const validation=validateDeliveryTarget(channel,destination?.target);
   if(!validation.ok){
@@ -8,8 +9,11 @@ export async function deliverAlert(destination, context, env) {
   }
   destination={...destination,target:validation.value};
 
-  if(channel==='webhook') return deliverWebhook(destination,context,env);
-  if(channel==='email') return deliverEmail(destination,context,env);
+  const attemptNumber=Math.max(1,Number(options.attemptNumber || 1));
+  const key=deliveryKey(context?.event?.id,destination?.id);
+
+  if(channel==='webhook') return deliverWebhook(destination,context,env,{attemptNumber,key});
+  if(channel==='email') return deliverEmail(destination,context,env,{attemptNumber,key});
 
   return {
     ok:false,
@@ -18,12 +22,16 @@ export async function deliverAlert(destination, context, env) {
   };
 }
 
-async function deliverWebhook(destination,context,env){
+async function deliverWebhook(destination,context,env,deliveryMeta){
   const headers={
     'content-type':'application/json',
     'user-agent':'DeFi-Guard/0.4',
-    'x-defi-guard-event-id':String(context.event?.id || '')
+    'x-defi-guard-event-id':String(context.event?.id || ''),
+    'x-defi-guard-delivery-attempt':String(deliveryMeta?.attemptNumber || 1)
   };
+  if(deliveryMeta?.key){
+    headers['x-defi-guard-delivery-key']=deliveryMeta.key;
+  }
   if(env?.WEBHOOK_BEARER_TOKEN){
     headers.authorization=`Bearer ${env.WEBHOOK_BEARER_TOKEN}`;
   }
@@ -54,7 +62,7 @@ async function deliverWebhook(destination,context,env){
   }
 }
 
-async function deliverEmail(destination,context,env){
+async function deliverEmail(destination,context,env,deliveryMeta){
   if(!env?.RESEND_API_KEY) {
     return {ok:false,providerMessageId:null,error:'resend_api_key_missing'};
   }
@@ -70,7 +78,8 @@ async function deliverEmail(destination,context,env){
       method:'POST',
       headers:{
         'content-type':'application/json',
-        'authorization':`Bearer ${env.RESEND_API_KEY}`
+        'authorization':`Bearer ${env.RESEND_API_KEY}`,
+        ...(deliveryMeta?.key ? {'Idempotency-Key':deliveryMeta.key} : {})
       },
       body:JSON.stringify({
         from:env.ALERT_EMAIL_FROM,

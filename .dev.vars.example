@@ -15,3 +15,6 @@ ALERT_EMAIL_FROM=DeFi Guard <alerts@example.com>
 
 # Optional. Applied to all generic webhook deliveries.
 WEBHOOK_BEARER_TOKEN=replace-me
+
+DELIVERY_RETRY_MAX_ATTEMPTS=3
+DELIVERY_RETRY_BATCH_SIZE=50

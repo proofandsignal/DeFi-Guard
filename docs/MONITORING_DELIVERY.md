@@ -160,3 +160,31 @@ Do not claim paid-monitoring readiness until all are true:
 ## Safety boundary
 
 This remains read-only monitoring. It does not sign transactions, rebalance, liquidate, repay, withdraw, or custody assets.
+
+
+## BUILD-010 delivery retry
+
+A failed delivery is no longer abandoned after the state-change cron that created it.
+
+On later scheduled runs DeFi Guard:
+1. selects failed event/destination pairs that have no successful delivery;
+2. retries only while the failed-attempt count is below the configured maximum;
+3. records every retry as a new delivery audit row;
+4. stops selecting the pair after a successful delivery;
+5. continues position monitoring even when retry processing has errors.
+
+Configuration:
+
+- `DELIVERY_RETRY_MAX_ATTEMPTS` — total attempts including the initial attempt; default 3, hard cap 10.
+- `DELIVERY_RETRY_BATCH_SIZE` — maximum failed event/destination pairs considered per cron; default 50.
+
+Webhook retry metadata:
+
+- `x-defi-guard-delivery-key` — stable for one event + destination.
+- `x-defi-guard-delivery-attempt` — 1 for the initial attempt, then 2, 3, etc.
+
+Resend email requests use the same stable value in the `Idempotency-Key` header.
+
+The validation webhook sink supports `?fail-first=1`: attempt 1 returns a controlled 503 and later attempts return 204. This is validation-only infrastructure.
+
+A delivery timeout can be ambiguous at the network boundary. DeFi Guard therefore supplies deterministic idempotency metadata, but the final duplicate-suppression guarantee depends on the receiving provider honoring that key.

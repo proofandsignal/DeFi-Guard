@@ -327,3 +327,109 @@ export async function listDeliveriesForPosition(db, positionId, limit = 50) {
     currentState:x.current_state
   }));
 }
+
+
+export async function listRetryableDeliveries(db, { limit = 50, maxAttempts = 3 } = {}) {
+  requireDb(db);
+  const safeLimit=Math.max(1,Math.min(200,Number(limit)||50));
+  const safeMaxAttempts=Math.max(1,Math.min(10,Number(maxAttempts)||3));
+
+  const out=await db.prepare(
+    `SELECT
+       e.id AS event_id,
+       e.position_id,
+       e.snapshot_id,
+       e.previous_state,
+       e.current_state,
+       e.event_type,
+       e.severity_rank,
+       e.reasons_json,
+       e.created_at AS event_created_at,
+       s.observed_at,
+       s.alert_state,
+       s.health_factor,
+       s.evaluation_json,
+       s.created_at AS snapshot_created_at,
+       p.watchlist_id,
+       p.external_position_id,
+       p.wallet_address,
+       p.protocol,
+       p.chain,
+       p.asset,
+       dd.id AS destination_id,
+       dd.channel,
+       dd.target,
+       COUNT(f.id) AS failed_attempts,
+       MAX(f.attempted_at) AS last_attempted_at
+     FROM deliveries f
+     JOIN alert_events e ON e.id = f.event_id
+     JOIN snapshots s ON s.id = e.snapshot_id
+     JOIN positions p ON p.id = e.position_id
+     JOIN delivery_destinations dd ON dd.id = f.destination_id AND dd.enabled = 1
+     WHERE f.status = 'FAILED'
+       AND NOT EXISTS (
+         SELECT 1
+         FROM deliveries sent
+         WHERE sent.event_id = f.event_id
+           AND sent.destination_id = f.destination_id
+           AND sent.status = 'SENT'
+       )
+     GROUP BY
+       e.id, e.position_id, e.snapshot_id, e.previous_state, e.current_state,
+       e.event_type, e.severity_rank, e.reasons_json, e.created_at,
+       s.observed_at, s.alert_state, s.health_factor, s.evaluation_json, s.created_at,
+       p.watchlist_id, p.external_position_id, p.wallet_address, p.protocol, p.chain, p.asset,
+       dd.id, dd.channel, dd.target
+     HAVING COUNT(f.id) < ?
+     ORDER BY last_attempted_at ASC
+     LIMIT ?`
+  ).bind(safeMaxAttempts,safeLimit).all();
+
+  return (out.results || []).map(x=>({
+    failedAttempts:Number(x.failed_attempts || 0),
+    lastAttemptedAt:x.last_attempted_at,
+    event:{
+      id:x.event_id,
+      positionId:x.position_id,
+      snapshotId:x.snapshot_id,
+      previousState:x.previous_state,
+      currentState:x.current_state,
+      eventType:x.event_type,
+      severityRank:x.severity_rank,
+      reasons:JSON.parse(x.reasons_json || '[]'),
+      createdAt:x.event_created_at
+    },
+    change:{
+      changed:true,
+      previousState:x.previous_state,
+      currentState:x.current_state,
+      eventType:x.event_type,
+      severityRank:x.severity_rank
+    },
+    snapshot:{
+      id:x.snapshot_id,
+      positionId:x.position_id,
+      observedAt:x.observed_at,
+      alertState:x.alert_state,
+      healthFactor:x.health_factor,
+      createdAt:x.snapshot_created_at
+    },
+    evaluation:JSON.parse(x.evaluation_json || '{}'),
+    position:{
+      id:x.position_id,
+      watchlistId:x.watchlist_id,
+      externalPositionId:x.external_position_id,
+      walletAddress:x.wallet_address,
+      protocol:x.protocol,
+      chain:x.chain,
+      asset:x.asset
+    },
+    destination:{
+      id:x.destination_id,
+      watchlistId:x.watchlist_id,
+      channel:x.channel,
+      target:x.target,
+      enabled:true
+    }
+  }));
+}

@@ -111,6 +111,20 @@ Implemented in code:
 
 See `docs/LIVE_RISK_MONITOR_ADAPTER.md`.
 
+
+## BUILD-010 — Delivery Retry + Idempotency
+
+Implemented in code:
+- failed notification attempts are selected for retry on later cron runs;
+- retry is bounded by `DELIVERY_RETRY_MAX_ATTEMPTS` (default 3, hard cap 10);
+- retry processing is isolated from position monitoring, so notification outages do not stop fresh risk snapshots;
+- a successful event/destination pair is excluded from future retries;
+- webhook retries carry a stable `x-defi-guard-delivery-key` and incrementing `x-defi-guard-delivery-attempt`;
+- Resend requests use the same stable value as `Idempotency-Key`;
+- validation sink supports deterministic fail-first testing without storing state.
+
+This gives delivery **at-least-once retry behavior with provider-side idempotency support** where the provider honors the supplied key. External delivery still requires real provider validation.
+
 ## BUILD-003 Definition of Done
 
 ### Code
@@ -130,14 +144,14 @@ See `docs/LIVE_RISK_MONITOR_ADAPTER.md`.
 - [x] GitHub Actions PASS.
 
 ### Deployment / Revenue Gate
-- [ ] Real D1 database bound as `DB`.
-- [ ] D1 migrations 0001 + 0002 applied.
-- [ ] Real snapshot provider connected.
+- [x] Real D1 database bound as `DB`.
+- [x] D1 migrations 0001 + 0002 applied.
+- [x] Real snapshot provider connected.
 - [ ] Resend sender configured.
-- [ ] First real position monitored by cron.
-- [ ] First real risk transition detected.
-- [ ] First real email/webhook delivered.
-- [ ] Next unchanged run produces no duplicate notification.
+- [x] First real position monitored by cron.
+- [x] First controlled Guard-only risk transition returned to real live state.
+- [x] First real webhook delivered and audited.
+- [x] Next unchanged run produced no duplicate notification.
 - [ ] First external beta tester.
 - [ ] First **€19 Founding Guard** payment.
 
@@ -153,6 +167,8 @@ Runtime configuration may include:
 - `ALERT_EMAIL_FROM`
 - `WEBHOOK_BEARER_TOKEN` — optional secret
 - `MONITOR_BATCH_SIZE`
+- `DELIVERY_RETRY_MAX_ATTEMPTS` — default 3, hard cap 10
+- `DELIVERY_RETRY_BATCH_SIZE` — default 50
 
 See `.dev.vars.example`.
 
