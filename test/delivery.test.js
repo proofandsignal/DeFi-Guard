@@ -16,7 +16,7 @@ test('webhook delivery posts Guard event payload and captures request id', async
 
   try{
     const result=await deliverAlert(
-      {channel:'webhook',target:'https://alerts.example.com/hook'},
+      {id:'pos-destination-1',channel:'webhook',target:'https://alerts.example.com/hook'},
       {
         event:{id:'evt-1',eventType:'RISK_IMPROVED'},
         change:{changed:true,eventType:'RISK_IMPROVED',previousState:'WARNING',currentState:'OK'},
@@ -32,6 +32,11 @@ test('webhook delivery posts Guard event payload and captures request id', async
     assert.equal(captured.url,'https://alerts.example.com/hook');
     assert.equal(captured.init.method,'POST');
     assert.equal(captured.init.headers['x-defi-guard-event-id'],'evt-1');
+    assert.equal(captured.init.headers['x-defi-guard-delivery-attempt'],'1');
+    assert.equal(
+      captured.init.headers['x-defi-guard-delivery-key'],
+      'evt-1-pos-destination-1'
+    );
 
     const body=JSON.parse(captured.init.body);
     assert.equal(body.service,'DeFi Guard');
@@ -61,6 +66,39 @@ test('webhook delivery records non-2xx as failure', async () => {
 
     assert.equal(result.ok,false);
     assert.match(result.error,/webhook_http_503/);
+  }finally{
+    globalThis.fetch=originalFetch;
+  }
+});
+
+
+test('webhook retry keeps delivery key stable and increments attempt metadata', async () => {
+  const originalFetch=globalThis.fetch;
+  const captured=[];
+
+  globalThis.fetch=async (url,init) => {
+    captured.push({url,init});
+    return new Response(null,{status:204,headers:{'x-request-id':'retry-ok'}});
+  };
+
+  try{
+    const destination={id:'destination-2',channel:'webhook',target:'https://alerts.example.com/hook'};
+    const context={
+      event:{id:'evt-retry',eventType:'RISK_ESCALATED'},
+      change:{changed:true,eventType:'RISK_ESCALATED',previousState:'WATCH',currentState:'WARNING'},
+      position:{id:'pos-2',protocol:'aave-v3',chain:'ethereum',asset:'ACCOUNT'},
+      evaluation:{alertState:'WARNING',healthFactor:1.2,reasons:[]}
+    };
+
+    await deliverAlert(destination,context,{}, {attemptNumber:1});
+    await deliverAlert(destination,context,{}, {attemptNumber:2});
+
+    assert.equal(captured[0].init.headers['x-defi-guard-delivery-attempt'],'1');
+    assert.equal(captured[1].init.headers['x-defi-guard-delivery-attempt'],'2');
+    assert.equal(
+      captured[0].init.headers['x-defi-guard-delivery-key'],
+      captured[1].init.headers['x-defi-guard-delivery-key']
+    );
   }finally{
     globalThis.fetch=originalFetch;
   }
