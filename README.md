@@ -91,6 +91,7 @@ Supported channels:
 - `GET /api/health`
 - `GET /api/v1/meta`
 - `POST /api/v1/evaluate`
+- `POST /api/v1/onboarding` — one-step Founding Beta onboarding
 
 See:
 - `docs/ALERT_MODEL.md`
@@ -124,6 +125,24 @@ Implemented in code:
 - validation sink supports deterministic fail-first testing without storing state.
 
 This gives delivery **at-least-once retry behavior with provider-side idempotency support** where the provider honors the supplied key. External delivery still requires real provider validation.
+
+
+## BUILD-011 — Founding Beta Onboarding
+
+Implemented in code:
+- one-step `POST /api/v1/onboarding` endpoint for the current Aave v3 / Ethereum Founding Beta;
+- requires the existing `X-Guard-Owner-Key` tenant boundary;
+- validates the public wallet and alert destination before persistence;
+- performs a live Risk Monitor preflight before creating Guard state;
+- requires an active Aave v3 debt position for this beta path;
+- atomically persists watchlist + monitored position + destination in one D1 batch;
+- returns the current evaluated risk state immediately;
+- activates read-only five-minute scheduled monitoring without custody or transaction execution;
+- rejects email onboarding while production email delivery is not configured.
+
+Current webhook beta flow:
+
+`wallet → live Aave preflight → watchlist + position + webhook destination → ACTIVE Guard → scheduled monitoring`
 
 ## BUILD-003 Definition of Done
 
