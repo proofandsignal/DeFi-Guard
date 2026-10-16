@@ -1,6 +1,8 @@
 import { evaluatePosition } from './core/guard.js';
 import { detectAlertChange } from './core/change.js';
 import { validateDeliveryTarget } from './core/delivery-policy.js';
+import { validateBetaOnboarding } from './core/onboarding.js';
+import { fetchPositionSnapshot } from './provider.js';
 import { runScheduledMonitoring } from './monitor.js';
 import {
   createWatchlist,
@@ -15,7 +17,8 @@ import {
   listAlertEvents,
   createDeliveryDestination,
   listDeliveryDestinations,
-  listDeliveriesForPosition
+  listDeliveriesForPosition,
+  createOnboardingBundle
 } from './store.js';
 
 const VERSION = '0.4.0';
@@ -57,6 +60,97 @@ export default {
       const payload = await readJson(request);
       if (payload.error) return payload.error;
       return json(evaluatePosition(payload.value));
+    }
+
+
+    if (request.method === 'POST' && url.pathname === '/api/v1/onboarding') {
+      if (!env?.DB) return dbMissing();
+      const ownerKey=await ownerHash(request);
+      if(!ownerKey) return json({error:'owner_key_required'},{status:401});
+
+      const payload=await readJson(request);
+      if(payload.error) return payload.error;
+
+      const validated=validateBetaOnboarding(payload.value);
+      if(!validated.ok) return json({error:validated.error},{status:400});
+
+      const input=validated.value;
+      if(input.alertChannel==='email' && !(env?.RESEND_API_KEY && env?.ALERT_EMAIL_FROM)){
+        return json({
+          error:'email_delivery_not_configured',
+          message:'Founding Beta email delivery is not enabled yet. Use an HTTPS webhook destination.'
+        },{status:503});
+      }
+
+      const now=new Date().toISOString();
+      const watchlist={
+        id:crypto.randomUUID(),
+        ownerKey,
+        label:input.label,
+        createdAt:now,
+        updatedAt:now
+      };
+      const position={
+        id:crypto.randomUUID(),
+        watchlistId:watchlist.id,
+        externalPositionId:null,
+        walletAddress:input.walletAddress,
+        protocol:input.protocol,
+        chain:input.chain,
+        asset:input.asset,
+        enabled:true,
+        createdAt:now,
+        updatedAt:now
+      };
+      const destination={
+        id:crypto.randomUUID(),
+        watchlistId:watchlist.id,
+        channel:input.alertChannel,
+        target:input.alertTarget,
+        enabled:true,
+        createdAt:now,
+        updatedAt:now
+      };
+
+      let snapshot;
+      try{
+        snapshot=await fetchPositionSnapshot(position,env);
+      }catch{
+        return json({
+          error:'wallet_preflight_failed',
+          message:'The wallet could not be verified against the live Aave v3 Ethereum snapshot provider.'
+        },{status:422});
+      }
+
+      if(!(Number(snapshot.debtValueUsd) > 0)){
+        return json({
+          error:'active_aave_debt_required',
+          message:'Founding Beta currently onboards wallets with an active Aave v3 Ethereum debt position.'
+        },{status:422});
+      }
+
+      const evaluation=evaluatePosition(snapshot);
+      await createOnboardingBundle(env.DB,{watchlist,position,destination});
+
+      return json({
+        status:'ACTIVE',
+        watchlist:publicWatchlist(watchlist),
+        position,
+        destination:publicDestination(destination),
+        currentRisk:{
+          alertState:evaluation.alertState,
+          healthFactor:evaluation.healthFactor,
+          verificationRequired:evaluation.verificationRequired,
+          reasons:evaluation.reasons
+        },
+        monitoring:{
+          mode:'read-only',
+          schedule:'every 5 minutes',
+          firstScheduledCheck:'pending',
+          execution:false,
+          custody:false
+        }
+      },{status:201});
     }
 
     if (url.pathname === '/api/v1/watchlists') {
