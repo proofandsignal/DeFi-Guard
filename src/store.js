@@ -433,3 +433,35 @@ export async function listRetryableDeliveries(db, { limit = 50, maxAttempts = 3 
     }
   }));
 }
+
+
+export async function createOnboardingBundle(db, bundle) {
+  requireDb(db);
+  const {watchlist,position,destination}=bundle;
+  const statements=[
+    db.prepare(
+      'INSERT INTO watchlists (id, owner_key, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).bind(
+      watchlist.id,watchlist.ownerKey,watchlist.label,watchlist.createdAt,watchlist.updatedAt
+    ),
+    db.prepare(
+      `INSERT INTO positions
+        (id, watchlist_id, external_position_id, wallet_address, protocol, chain, asset, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+    ).bind(
+      position.id,position.watchlistId,position.externalPositionId,position.walletAddress,
+      position.protocol,position.chain,position.asset,position.createdAt,position.updatedAt
+    ),
+    db.prepare(
+      `INSERT INTO delivery_destinations
+        (id, watchlist_id, channel, target, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?)`
+    ).bind(
+      destination.id,destination.watchlistId,destination.channel,destination.target,
+      destination.createdAt,destination.updatedAt
+    )
+  ];
+
+  await db.batch(statements);
+  return {watchlist,position,destination};
+}
