@@ -15,3 +15,7 @@ jobs:
       - run: npm install
       - run: npm run check
       - run: npm test
+      - name: Verify owner-only preview gate
+        run: node --test preview/boost-nine/qa-server.test.mjs
+      - name: Verify Chromium interactive risk demo at desktop/mobile widths
+        run: node qa/guard-browser-smoke.mjs
