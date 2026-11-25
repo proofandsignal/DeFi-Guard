@@ -162,6 +162,12 @@ try {
   await cdp.eval("document.querySelector('#quality').value='COMPLETE'; document.querySelector('#hf').value='-2'; document.querySelector('#evaluate').click()");
   assert.equal(await cdp.eval("document.querySelector('#state').textContent"), "VERIFY");
   assert.match(await cdp.eval("document.querySelector('#summary').textContent"), /Invalid numeric input/);
+  await cdp.eval("document.querySelector('#hf').value=''; document.querySelector('#evaluate').click()");
+  assert.equal(await cdp.eval("document.querySelector('#state').textContent"), "VERIFY", "empty Health Factor must fail closed");
+  assert.match(await cdp.eval("document.querySelector('#summary').textContent"), /Invalid numeric input/);
+  await cdp.eval("document.querySelector('#hf').value='1.8'; document.querySelector('#buffer').value=''; document.querySelector('#evaluate').click()");
+  assert.equal(await cdp.eval("document.querySelector('#state').textContent"), "VERIFY", "empty buffer must fail closed");
+  assert.match(await cdp.eval("document.querySelector('#summary').textContent"), /Invalid numeric input/);
   await cdp.eval("document.querySelector('#preset').value='ok'; document.querySelector('#preset').dispatchEvent(new Event('change'))");
   for (const width of [360, 412, 1440]) {
     await cdp.call("Emulation.setDeviceMetricsOverride", {
